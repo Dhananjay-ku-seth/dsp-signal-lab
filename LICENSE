@@ -1,0 +1,25 @@
+LabBench Source-Available License
+Copyright (c) 2026 Dhananjay Kumar Seth. All rights reserved.
+
+This repository is part of the LabBench suite of interactive engineering tools
+(https://dhananjay-kumar-seth.vercel.app/projects).
+
+PERMITTED:
+  - Viewing this source code for personal, educational, and portfolio-review purposes.
+  - Using the publicly deployed demo application linked in this repository's README,
+    free of charge, for personal and non-commercial purposes.
+  - Forking for local experimentation and learning, without redistribution.
+
+NOT PERMITTED without prior written permission from the copyright holder:
+  - Copying, modifying, merging, publishing, or redistributing this source code,
+    in whole or in part, in any product or service (commercial or non-commercial).
+  - Hosting a copy or derivative of this application for public or commercial use.
+  - Selling, sublicensing, or otherwise monetizing this software or any derivative
+    of it.
+
+This software is provided "as is", without warranty of any kind, express or
+implied. In no event shall the author be liable for any claim, damages, or other
+liability arising from the use of this software.
+
+For licensing inquiries (commercial use, redistribution, white-labeling), contact:
+adplayers746@gmail.com
