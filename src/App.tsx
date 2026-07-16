@@ -223,7 +223,10 @@ export default function App() {
           <h1>DSP SIGNAL LAB</h1>
           <p>Real-time Fourier analysis &amp; digital filtering — Web Audio · FFT 2048 · BiquadFilter</p>
         </div>
-        <a className="src-link" href="#" onClick={(e) => e.preventDefault()}>ECE Portfolio · Dhananjay Seth</a>
+        <div className="badges">
+          <a className="labbench-badge" href="https://labbench-hub.vercel.app/" target="_blank" rel="noopener noreferrer">⚡ LabBench</a>
+          <a className="src-link" href="https://dhananjay-kumar-seth.vercel.app/" target="_blank" rel="noopener noreferrer">ECE Portfolio · Dhananjay Seth</a>
+        </div>
       </header>
 
       <div className="scopes">
