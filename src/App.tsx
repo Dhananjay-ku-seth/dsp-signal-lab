@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import AuthPanel from "./AuthPanel";
+import SavePreset, { type DspConfig } from "./SavePreset";
 
 type Wave = "sine" | "square" | "sawtooth" | "triangle";
 type Source = "tone" | "mic";
@@ -224,10 +226,23 @@ export default function App() {
           <p>Real-time Fourier analysis &amp; digital filtering — Web Audio · FFT 2048 · BiquadFilter</p>
         </div>
         <div className="badges">
-          <a className="labbench-badge" href="https://labbench-hub.vercel.app/" target="_blank" rel="noopener noreferrer">⚡ LabBench</a>
-          <a className="src-link" href="https://dhananjay-kumar-seth.vercel.app/" target="_blank" rel="noopener noreferrer">ECE Portfolio · Dhananjay Seth</a>
+          <AuthPanel />
+          <div className="badge-links">
+            <a className="labbench-badge" href="https://labbench-hub.vercel.app/" target="_blank" rel="noopener noreferrer">⚡ LabBench</a>
+            <a className="src-link" href="https://dhananjay-kumar-seth.vercel.app/" target="_blank" rel="noopener noreferrer">ECE Portfolio · Dhananjay Seth</a>
+          </div>
         </div>
       </header>
+
+      <div className="savebar">
+        <SavePreset
+          config={{ source, wave, freq, tone, noise, filter, cutoff, q }}
+          onLoad={(c: DspConfig) => {
+            setSource(c.source); setWave(c.wave); setFreq(c.freq); setTone(c.tone);
+            setNoise(c.noise); setFilter(c.filter); setCutoff(c.cutoff); setQ(c.q);
+          }}
+        />
+      </div>
 
       <div className="scopes">
         <div className="scope">
