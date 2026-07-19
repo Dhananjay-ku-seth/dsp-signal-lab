@@ -6,6 +6,17 @@ type Wave = "sine" | "square" | "sawtooth" | "triangle";
 type Source = "tone" | "mic";
 type FilterKind = "none" | "lowpass" | "highpass" | "bandpass" | "notch";
 
+// simple perceptual-ish colormap for the spectrogram: navy -> cyan -> yellow -> red
+function specColor(v: number): string {
+  const t = v / 255;
+  let r = 0, g = 0, b = 0;
+  if (t < 0.25) { const k = t / 0.25; b = Math.round(60 + 160 * k); }
+  else if (t < 0.5) { const k = (t - 0.25) / 0.25; g = Math.round(255 * k); b = 220; }
+  else if (t < 0.75) { const k = (t - 0.5) / 0.25; r = Math.round(255 * k); g = 255; b = Math.round(220 * (1 - k)); }
+  else { const k = (t - 0.75) / 0.25; r = 255; g = Math.round(255 * (1 - k)); }
+  return `rgb(${r},${g},${b})`;
+}
+
 type Nodes = {
   osc?: OscillatorNode;
   toneGain?: GainNode;
@@ -37,6 +48,7 @@ export default function App() {
   const rafRef = useRef<number>(0);
   const timeCanvas = useRef<HTMLCanvasElement>(null);
   const freqCanvas = useRef<HTMLCanvasElement>(null);
+  const spectroCanvas = useRef<HTMLCanvasElement>(null);
 
   // live-update continuous params without rebuilding the graph
   useEffect(() => {
@@ -53,6 +65,8 @@ export default function App() {
   async function start() {
     setError("");
     try {
+      const sc = spectroCanvas.current;
+      if (sc) { const sctx = sc.getContext("2d")!; sctx.fillStyle = "#0a0e14"; sctx.fillRect(0, 0, sc.width, sc.height); }
       const ctx = ctxRef.current ?? new (window.AudioContext || (window as any).webkitAudioContext)();
       ctxRef.current = ctx;
       await ctx.resume();
@@ -212,6 +226,22 @@ export default function App() {
       }
       const detected = peakVal > 40 ? Math.round((peakBin / freqData.length) * nyquist) : 0;
       setPeak(detected);
+
+      // ---- spectrogram (scrolling time-vs-frequency waterfall) ----
+      const sc = spectroCanvas.current;
+      if (sc) {
+        const sctx = sc.getContext("2d")!;
+        const SW = sc.width, SH = sc.height;
+        // shift everything one pixel left, then paint a fresh column at the right edge
+        const img = sctx.getImageData(1, 0, SW - 1, SH);
+        sctx.putImageData(img, 0, 0);
+        for (let y = 0; y < SH; y++) {
+          // top of the canvas = high frequency, bottom = low (matches the spectrum view above)
+          const bin = Math.floor((1 - y / SH) * bins);
+          sctx.fillStyle = specColor(freqData[bin] || 0);
+          sctx.fillRect(SW - 1, y, 1, 1);
+        }
+      }
     }
 
     rafRef.current = requestAnimationFrame(draw);
@@ -255,6 +285,13 @@ export default function App() {
             <small>{peak > 0 ? `peak ≈ ${peak} Hz` : "FFT magnitude spectrum"}</small>
           </div>
           <canvas ref={freqCanvas} width={900} height={220} />
+        </div>
+        <div className="scope wide">
+          <div className="scope-head">
+            <span>▦ SPECTROGRAM</span>
+            <small>time (scrolling right→left) vs frequency 0–8kHz, color = magnitude</small>
+          </div>
+          <canvas ref={spectroCanvas} width={900} height={160} />
         </div>
       </div>
 

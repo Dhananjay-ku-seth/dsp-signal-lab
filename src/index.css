@@ -38,6 +38,7 @@ header p { margin: 3px 0 0; color: var(--dim); font-size: 12.5px; letter-spacing
 .labbench-badge:hover { background: rgba(245,166,35,0.2); }
 
 .scopes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px 0; }
+.scopes .wide { grid-column: 1 / -1; }
 .scope { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
 .scope-head { display: flex; justify-content: space-between; align-items: baseline; margin: 2px 4px 8px; }
 .scope-head span { font-size: 12px; letter-spacing: 2px; color: var(--cyan); font-weight: 600; }
