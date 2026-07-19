@@ -17,7 +17,7 @@ Part of the [LabBench](https://labbench-hub.vercel.app/) suite of interactive en
 ## LabBench Pro
 Sign in to save and reload your signal-shaping presets (source, waveform, frequency, filter, cutoff, Q) —
 part of the same optional ₹29/mo LabBench Pro subscription as the rest of the suite. Upgrade from
-[Logic Circuit Simulator](https://logic-circuit-sim.vercel.app/), which hosts the checkout for all 5 tools.
+[Logic Circuit Simulator](https://logic-circuit-sim.vercel.app/), which hosts the checkout for all 7 tools.
 
 ## Tech
 React + TypeScript + Vite. No runtime libraries — all signal processing via the native Web Audio API.
