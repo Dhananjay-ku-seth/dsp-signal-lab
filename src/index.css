@@ -132,3 +132,15 @@ footer { text-align: center; color: var(--dim); font-size: 11.5px; margin-top: 2
 .load-del { background: transparent; border: none; color: var(--dim); cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 4px; }
 .load-del:hover { color: #f43f5e; }
 .load-del.confirm { color: #fff; background: #f43f5e; font-size: 10.5px; padding: 3px 6px; font-weight: 600; }
+
+/* Phones: fixed-width columns plus the slider minimum width made the page wider than the screen. */
+@media (max-width: 480px) {
+  .gain { grid-template-columns: 104px minmax(0, 1fr) 52px; }
+  .slider { grid-template-columns: 90px minmax(0, 1fr) 56px; }
+  header { flex-wrap: wrap; }
+  .badges { margin-left: 0; flex-wrap: wrap; }
+  input[type="range"] { min-width: 0; width: 100%; }
+}
+
+.auth-link { background: none; border: 0; color: inherit; opacity: .7; cursor: pointer; font-size: 12px; text-decoration: underline; padding: 2px 0; align-self: flex-start; }
+.auth-link:hover { opacity: 1; }

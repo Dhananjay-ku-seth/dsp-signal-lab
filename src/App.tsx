@@ -46,6 +46,8 @@ export default function App() {
   const ctxRef = useRef<AudioContext | null>(null);
   const nRef = useRef<Nodes | null>(null);
   const rafRef = useRef<number>(0);
+  const startingRef = useRef(false); // a start() call is in flight
+  const cancelRef = useRef(false);   // stop() was requested while start() was still waiting
   const timeCanvas = useRef<HTMLCanvasElement>(null);
   const freqCanvas = useRef<HTMLCanvasElement>(null);
   const spectroCanvas = useRef<HTMLCanvasElement>(null);
@@ -63,6 +65,11 @@ export default function App() {
   }, [wave, freq, tone, noise, filter, cutoff, q, source]);
 
   async function start() {
+    // Ignore repeat clicks while a start is in flight or the graph is already running; a second graph would
+    // leave the first oscillator playing with no way to stop it.
+    if (startingRef.current || nRef.current) return;
+    startingRef.current = true;
+    cancelRef.current = false;
     setError("");
     try {
       const sc = spectroCanvas.current;
@@ -70,6 +77,7 @@ export default function App() {
       const ctx = ctxRef.current ?? new (window.AudioContext || (window as any).webkitAudioContext)();
       ctxRef.current = ctx;
       await ctx.resume();
+      if (cancelRef.current) return;
 
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
@@ -112,6 +120,7 @@ export default function App() {
         Object.assign(n, { osc, toneGain, noiseSrc, noiseGain, out });
       } else {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (cancelRef.current) { stream.getTracks().forEach((t) => t.stop()); return; }
         const mic = ctx.createMediaStreamSource(stream);
         mic.connect(mix);
         // NOTE: do not connect analyser -> destination in mic mode (feedback)
@@ -126,10 +135,13 @@ export default function App() {
       if (source === "mic") setError(e?.message || "Microphone blocked. Allow mic access to use this mode.");
       else setError("Could not start audio — try clicking START again.");
       setRunning(false);
+    } finally {
+      startingRef.current = false;
     }
   }
 
   function stop() {
+    cancelRef.current = true;
     cancelAnimationFrame(rafRef.current);
     const n = nRef.current;
     if (n) {
@@ -174,10 +186,15 @@ export default function App() {
       c.strokeStyle = "#22d3ee";
       c.lineWidth = 2;
       c.beginPath();
-      const span = Math.min(N, 800);
+      // Trigger on the first rising zero-crossing so a steady tone holds still instead of drifting.
+      const span = Math.min(N / 2, 800);
+      let trig = 0;
+      for (let i = 1; i < N - span; i++) {
+        if (timeData[i - 1] < 0 && timeData[i] >= 0) { trig = i; break; }
+      }
       for (let i = 0; i < span; i++) {
         const x = (i / span) * W;
-        const y = H / 2 - timeData[i] * (H / 2) * 0.9;
+        const y = H / 2 - timeData[trig + i] * (H / 2) * 0.9;
         i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
       }
       c.stroke();
@@ -224,7 +241,20 @@ export default function App() {
         c.fillStyle = "#f43f5e";
         c.fillText(`fc ${cutoff}Hz`, fx + 3, 12);
       }
-      const detected = peakVal > 40 ? Math.round((peakBin / freqData.length) * nyquist) : 0;
+      // Report the fundamental: the lowest strong local peak, within ~12 dB of the tallest (byte scale is 70 dB
+      // over 0-255). Then refine with parabolic interpolation, since one FFT bin is about 21 Hz wide.
+      let detected = 0;
+      if (peakVal > 40) {
+        const floor = peakVal - 44;
+        let pick = peakBin;
+        for (let i = 2; i < bins - 1; i++) {
+          if (freqData[i] >= floor && freqData[i] >= freqData[i - 1] && freqData[i] > freqData[i + 1]) { pick = i; break; }
+        }
+        const a = freqData[pick - 1] ?? 0, b = freqData[pick], c = freqData[pick + 1] ?? 0;
+        const denom = a - 2 * b + c;
+        const shift = denom !== 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / denom)) : 0;
+        detected = Math.round(((pick + shift) / freqData.length) * nyquist);
+      }
       setPeak(detected);
 
       // ---- spectrogram (scrolling time-vs-frequency waterfall) ----
@@ -282,7 +312,7 @@ export default function App() {
         <div className="scope">
           <div className="scope-head">
             <span>▲ FREQUENCY DOMAIN</span>
-            <small>{peak > 0 ? `peak ≈ ${peak} Hz` : "FFT magnitude spectrum"}</small>
+            <small>{peak > 0 ? `fundamental ≈ ${peak} Hz` : "FFT magnitude spectrum"}</small>
           </div>
           <canvas ref={freqCanvas} width={900} height={220} />
         </div>
