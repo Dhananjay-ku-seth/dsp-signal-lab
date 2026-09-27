@@ -6,6 +6,85 @@ type Wave = "sine" | "square" | "sawtooth" | "triangle";
 type Source = "tone" | "mic";
 type FilterKind = "none" | "lowpass" | "highpass" | "bandpass" | "notch";
 
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+// Nearest musical note (12-TET, A4 = 440 Hz) for a frequency, plus how far off in cents.
+function noteFromFreq(hz: number): { name: string; cents: number } | null {
+  if (hz <= 0) return null;
+  const semitonesFromA4 = 12 * Math.log2(hz / 440);
+  const rounded = Math.round(semitonesFromA4);
+  const cents = Math.round((semitonesFromA4 - rounded) * 100);
+  const midi = 69 + rounded;
+  const name = NOTE_NAMES[((midi % 12) + 12) % 12] + (Math.floor(midi / 12) - 1);
+  return { name, cents };
+}
+
+// dBFS from time-domain samples (already in [-1, 1]).
+function rmsDb(timeData: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < timeData.length; i++) sum += timeData[i] * timeData[i];
+  const rms = Math.sqrt(sum / timeData.length);
+  return rms > 0 ? Math.max(-60, 20 * Math.log10(rms)) : -60;
+}
+function peakDb(timeData: Float32Array): number {
+  let peak = 0;
+  for (let i = 0; i < timeData.length; i++) peak = Math.max(peak, Math.abs(timeData[i]));
+  return peak > 0 ? Math.max(-60, 20 * Math.log10(peak)) : -60;
+}
+
+// Total harmonic distortion, estimated from the FFT bins: compares the fundamental's amplitude to
+// its first few harmonics (2f, 3f, 4f, 5f). AnalyserNode gives magnitude in bytes (0-255) mapped
+// linearly between minDecibels/maxDecibels, so we convert back to a linear amplitude before combining.
+//
+// A loud tone saturates several adjacent bins at the byte ceiling (255), so the bin used to *report*
+// the pitch (deliberately the trailing edge of that plateau, to avoid ever reporting a harmonic as the
+// pitch) is a bin or two off from the fundamental's true centre. That is fine for a pitch readout, but
+// multiplying it by 2-5 for harmonic bins would compound the error and land off the real harmonic peaks
+// entirely. So here we re-estimate the fundamental's centre with an amplitude-weighted centroid around
+// the reported bin, and widen the harmonic search window with h so a larger multiple tolerates more error.
+function estimateThd(freqData: Uint8Array, reportedBin: number, minDb: number, maxDb: number): number | null {
+  if (reportedBin < 2) return null;
+  const linearOf = (bin: number) => {
+    const v = freqData[bin] ?? 0;
+    const db = minDb + (v / 255) * (maxDb - minDb);
+    return 10 ** (db / 20);
+  };
+  const localMax = (center: number, span: number) => {
+    let best = Math.max(0, Math.min(freqData.length - 1, Math.round(center)));
+    for (let d = -span; d <= span; d++) {
+      const b = Math.round(center) + d;
+      if (b >= 0 && b < freqData.length && freqData[b] > freqData[best]) best = b;
+    }
+    return best;
+  };
+  let wSum = 0, vSum = 0;
+  for (let d = -3; d <= 3; d++) {
+    const b = reportedBin + d;
+    if (b < 0 || b >= freqData.length) continue;
+    wSum += b * freqData[b];
+    vSum += freqData[b];
+  }
+  const f0 = vSum > 0 ? wSum / vSum : reportedBin;
+  const fundamentalBin = localMax(f0, 1);
+  // The analyser's dB range is fixed (its ceiling is close to a full-scale tone), so a byte pinned at
+  // 255 means the fundamental is clipped in the readout. Any ratio computed against a clipped value
+  // would be meaningless, so it is more honest to report "not measurable" than a wrong number.
+  if (freqData[fundamentalBin] >= 253) return null;
+  const fundamental = linearOf(fundamentalBin);
+  if (fundamental <= 0) return null;
+  let harmonicPower = 0;
+  let any = false;
+  for (let h = 2; h <= 5; h++) {
+    const center = f0 * h;
+    if (center >= freqData.length - 1) break;
+    const best = localMax(center, Math.ceil(h * 0.6) + 1);
+    harmonicPower += linearOf(best) ** 2;
+    any = true;
+  }
+  if (!any) return null;
+  return Math.min(999, (Math.sqrt(harmonicPower) / fundamental) * 100);
+}
+
 // simple perceptual-ish colormap for the spectrogram: navy -> cyan -> yellow -> red
 function specColor(v: number): string {
   const t = v / 255;
@@ -17,6 +96,13 @@ function specColor(v: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
+// AnalyserNode defaults we rely on for converting the display analyser's byte-scaled magnitude back to dB.
+const MIN_DB = -100;
+const MAX_DB = -30;
+// The dedicated THD analyser is given a full-scale ceiling instead, so it does not clip on loud tones.
+const THD_MIN_DB = -100;
+const THD_MAX_DB = 0;
+
 type Nodes = {
   osc?: OscillatorNode;
   toneGain?: GainNode;
@@ -25,6 +111,7 @@ type Nodes = {
   mix: GainNode;
   filter: BiquadFilterNode;
   analyser: AnalyserNode;
+  thdAnalyser: AnalyserNode;
   out?: GainNode;
   mic?: MediaStreamAudioSourceNode;
   stream?: MediaStream;
@@ -42,6 +129,10 @@ export default function App() {
   const [q, setQ] = useState(1);
   const [peak, setPeak] = useState(0);
   const [error, setError] = useState("");
+  const [levels, setLevels] = useState({ rms: -60, peak: -60 });
+  const [thd, setThd] = useState<number | null>(null);
+  const [frozen, setFrozen] = useState(false);
+  const [measure, setMeasure] = useState<{ x: number; hz: number; db: number } | null>(null);
 
   const ctxRef = useRef<AudioContext | null>(null);
   const nRef = useRef<Nodes | null>(null);
@@ -51,6 +142,9 @@ export default function App() {
   const timeCanvas = useRef<HTMLCanvasElement>(null);
   const freqCanvas = useRef<HTMLCanvasElement>(null);
   const spectroCanvas = useRef<HTMLCanvasElement>(null);
+  const frozenRef = useRef(false);
+  const lastFreqData = useRef<Uint8Array | null>(null);
+  const lastMaxHz = useRef(8000);
 
   // live-update continuous params without rebuilding the graph
   useEffect(() => {
@@ -82,6 +176,15 @@ export default function App() {
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.75;
+      // A second analyser, purely for the THD readout. It shares the same fft size and bin-to-Hz
+      // mapping as the display analyser, but with the ceiling raised to full scale (0 dBFS) instead of
+      // the default -30 dBFS, so a loud harmonic-rich tone (e.g. a square wave) does not clip its bins
+      // before the harmonic-to-fundamental ratio can be measured.
+      const thdAnalyser = ctx.createAnalyser();
+      thdAnalyser.fftSize = analyser.fftSize;
+      thdAnalyser.smoothingTimeConstant = analyser.smoothingTimeConstant;
+      thdAnalyser.minDecibels = THD_MIN_DB;
+      thdAnalyser.maxDecibels = THD_MAX_DB;
       const flt = ctx.createBiquadFilter();
       flt.type = (filter === "none" ? "allpass" : filter) as BiquadFilterType;
       flt.frequency.value = cutoff;
@@ -89,8 +192,9 @@ export default function App() {
       const mix = ctx.createGain();
       mix.connect(flt);
       flt.connect(analyser);
+      flt.connect(thdAnalyser);
 
-      const n: Nodes = { mix, filter: flt, analyser };
+      const n: Nodes = { mix, filter: flt, analyser, thdAnalyser };
 
       if (source === "tone") {
         const osc = ctx.createOscillator();
@@ -148,10 +252,74 @@ export default function App() {
       try { n.osc?.stop(); } catch {}
       try { n.noiseSrc?.stop(); } catch {}
       n.stream?.getTracks().forEach((t) => t.stop());
-      try { n.mix.disconnect(); n.filter.disconnect(); n.analyser.disconnect(); n.out?.disconnect(); } catch {}
+      try { n.mix.disconnect(); n.filter.disconnect(); n.analyser.disconnect(); n.thdAnalyser.disconnect(); n.out?.disconnect(); } catch {}
     }
     nRef.current = null;
     setRunning(false);
+    setLevels({ rms: -60, peak: -60 });
+    setThd(null);
+    setPeak(0);
+  }
+
+  function toggleFreeze() {
+    setFrozen((f) => { frozenRef.current = !f; return !f; });
+  }
+
+  // Space toggles start/stop, unless the user is typing somewhere (e.g. renaming a preset).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const typing = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      if (e.code === "Space" && !typing) {
+        e.preventDefault();
+        running ? stop() : start();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+
+  // Click (or drag) on the spectrum to read off the frequency and level at that point.
+  function measureAt(clientX: number, clientY: number) {
+    const fc = freqCanvas.current;
+    const data = lastFreqData.current;
+    if (!fc || !data) return;
+    const rect = fc.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const bins = Math.floor((lastMaxHz.current / (ctxRef.current!.sampleRate / 2)) * data.length);
+    const bin = Math.min(data.length - 1, Math.round((x / rect.width) * bins));
+    const hz = Math.round((bin / data.length) * (ctxRef.current!.sampleRate / 2));
+    const db = Math.round(MIN_DB + (data[bin] / 255) * (MAX_DB - MIN_DB));
+    setMeasure({ x: (x / rect.width) * fc.width, hz, db });
+    void clientY;
+  }
+
+  function exportSpectrumPng() {
+    const fc = freqCanvas.current;
+    if (!fc) return;
+    const a = document.createElement("a");
+    a.href = fc.toDataURL("image/png");
+    a.download = `dsp-spectrum-${Date.now()}.png`;
+    a.click();
+  }
+
+  function exportSpectrumCsv() {
+    const data = lastFreqData.current;
+    if (!data || !ctxRef.current) return;
+    const nyquist = ctxRef.current.sampleRate / 2;
+    let csv = "frequency_hz,magnitude_dbfs\n";
+    for (let i = 0; i < data.length; i++) {
+      const hz = Math.round((i / data.length) * nyquist);
+      const db = Math.round(MIN_DB + (data[i] / 255) * (MAX_DB - MIN_DB));
+      csv += `${hz},${db}\n`;
+    }
+    const blob = new Blob([csv], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `dsp-spectrum-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   // restart the graph when the source type changes mid-run
@@ -163,6 +331,8 @@ export default function App() {
   useEffect(() => () => stop(), []);
 
   function draw() {
+    rafRef.current = requestAnimationFrame(draw);
+    if (frozenRef.current) return; // keep the last frame on screen; audio keeps running underneath
     const n = nRef.current, ctx = ctxRef.current;
     if (!n || !ctx) return;
     const analyser = n.analyser;
@@ -171,6 +341,9 @@ export default function App() {
     const freqData = new Uint8Array(analyser.frequencyBinCount);
     analyser.getFloatTimeDomainData(timeData);
     analyser.getByteFrequencyData(freqData);
+    setLevels({ rms: rmsDb(timeData), peak: peakDb(timeData) });
+    const thdData = new Uint8Array(n.thdAnalyser.frequencyBinCount);
+    n.thdAnalyser.getByteFrequencyData(thdData);
 
     // ---- oscilloscope (time domain) ----
     const tc = timeCanvas.current;
@@ -254,8 +427,13 @@ export default function App() {
         const denom = a - 2 * b + c;
         const shift = denom !== 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / denom)) : 0;
         detected = Math.round(((pick + shift) / freqData.length) * nyquist);
+        setThd(estimateThd(thdData, pick, THD_MIN_DB, THD_MAX_DB));
+      } else {
+        setThd(null);
       }
       setPeak(detected);
+      lastFreqData.current = freqData;
+      lastMaxHz.current = maxHz;
 
       // ---- spectrogram (scrolling time-vs-frequency waterfall) ----
       const sc = spectroCanvas.current;
@@ -273,8 +451,6 @@ export default function App() {
         }
       }
     }
-
-    rafRef.current = requestAnimationFrame(draw);
   }
 
   return (
@@ -308,13 +484,36 @@ export default function App() {
         <div className="scope">
           <div className="scope-head"><span>◉ TIME DOMAIN</span><small>oscilloscope</small></div>
           <canvas ref={timeCanvas} width={900} height={220} />
+          <div className="meters">
+            <Meter label="RMS" db={levels.rms} />
+            <Meter label="PEAK" db={levels.peak} />
+          </div>
         </div>
         <div className="scope">
           <div className="scope-head">
             <span>▲ FREQUENCY DOMAIN</span>
-            <small>{peak > 0 ? `fundamental ≈ ${peak} Hz` : "FFT magnitude spectrum"}</small>
+            <small>
+              {peak > 0 ? (
+                <>
+                  fundamental ≈ {peak} Hz
+                  {(() => { const n = noteFromFreq(peak); return n ? ` · ${n.name} (${n.cents >= 0 ? "+" : ""}${n.cents}¢)` : ""; })()}
+                  {thd !== null ? ` · THD ≈ ${thd < 0.1 ? "<0.1" : thd.toFixed(1)}%` : ""}
+                </>
+              ) : "FFT magnitude spectrum"}
+            </small>
           </div>
-          <canvas ref={freqCanvas} width={900} height={220} />
+          <div
+            className="scope-canvas-wrap"
+            onMouseMove={(e) => measureAt(e.clientX, e.clientY)}
+            onMouseLeave={() => setMeasure(null)}
+          >
+            <canvas ref={freqCanvas} width={900} height={220} />
+            {measure && (
+              <div className="measure-line" style={{ left: `${(measure.x / 900) * 100}%` }}>
+                <span className="measure-tag">{measure.hz} Hz · {measure.db} dBFS</span>
+              </div>
+            )}
+          </div>
         </div>
         <div className="scope wide">
           <div className="scope-head">
@@ -332,11 +531,21 @@ export default function App() {
           ) : (
             <button className="stop" onClick={stop}>■ STOP</button>
           )}
+          {running && (
+            <button className={"freeze" + (frozen ? " on" : "")} onClick={toggleFreeze} title="Pause the display without stopping the audio">
+              {frozen ? "▶ Resume" : "❄ Freeze"}
+            </button>
+          )}
           <div className="seg">
             <button className={source === "tone" ? "on" : ""} onClick={() => setSource("tone")}>Signal Generator</button>
             <button className={source === "mic" ? "on" : ""} onClick={() => setSource("mic")}>🎤 Microphone</button>
           </div>
+          <div className="export-group">
+            <button className="ghost-btn" disabled={!running} onClick={exportSpectrumPng} title="Save the current spectrum as an image">⬇ PNG</button>
+            <button className="ghost-btn" disabled={!running} onClick={exportSpectrumCsv} title="Save the current spectrum bins as a CSV">⬇ CSV</button>
+          </div>
           {error && <span className="err">{error}</span>}
+          <span className="kbd-hint">space to start/stop</span>
         </div>
 
         <div className="controls">
@@ -365,13 +574,26 @@ export default function App() {
         </div>
 
         <p className="hint">
-          Tip: pick a <b>square</b> wave and watch the odd-harmonic spikes in the spectrum. Add noise, then sweep a
-          <b> lowpass</b> cutoff down to watch the high frequencies get attenuated in real time. Switch to
-          <b> Microphone</b> and whistle — the peak tracker finds your pitch.
+          Tip: pick a <b>square</b> wave and watch the odd-harmonic spikes in the spectrum, and the THD readout climb.
+          Add noise, then sweep a <b>lowpass</b> cutoff down to watch the high frequencies get attenuated in real time.
+          Switch to <b>Microphone</b> and whistle — the peak tracker finds your pitch and the nearest musical note.
+          Hover the spectrum to read off any frequency, or hit <b>Freeze</b> to pause it and export a PNG or CSV.
         </p>
       </div>
 
       <footer>Built with the Web Audio API — no libraries. AnalyserNode performs a real 2048-point FFT every frame.</footer>
+    </div>
+  );
+}
+
+function Meter({ label, db }: { label: string; db: number }) {
+  const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+  const danger = db > -3;
+  return (
+    <div className="meter-row">
+      <span className="meter-label">{label}</span>
+      <div className="meter-track"><div className={"meter-fill" + (danger ? " hot" : "")} style={{ width: `${pct}%` }} /></div>
+      <span className="meter-val">{db <= -60 ? "-∞" : db.toFixed(1)} dB</span>
     </div>
   );
 }

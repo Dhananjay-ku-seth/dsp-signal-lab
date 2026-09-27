@@ -144,3 +144,27 @@ footer { text-align: center; color: var(--dim); font-size: 11.5px; margin-top: 2
 
 .auth-link { background: none; border: 0; color: inherit; opacity: .7; cursor: pointer; font-size: 12px; text-decoration: underline; padding: 2px 0; align-self: flex-start; }
 .auth-link:hover { opacity: 1; }
+
+/* ---- freeze / export / level meters / measurement cursor (added) ---- */
+.freeze { font-family: inherit; font-weight: 700; letter-spacing: 1px; font-size: 12.5px; cursor: pointer;
+  background: var(--panel-2); color: var(--txt); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.freeze.on { background: #7dd3fc; color: #04222a; }
+.export-group { display: flex; gap: 6px; }
+.ghost-btn { font-family: inherit; font-size: 11.5px; cursor: pointer; background: transparent; color: var(--dim);
+  border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; }
+.ghost-btn:hover:not(:disabled) { color: var(--txt); border-color: var(--cyan); }
+.ghost-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.kbd-hint { margin-left: auto; color: var(--dim); font-size: 11px; }
+
+.scope-canvas-wrap { position: relative; }
+.measure-line { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed rgba(255,255,255,0.55); pointer-events: none; }
+.measure-tag { position: absolute; top: 4px; left: 6px; white-space: nowrap; background: rgba(10,14,20,0.9);
+  border: 1px solid var(--cyan); color: var(--cyan); font-size: 10.5px; padding: 2px 6px; border-radius: 5px; }
+
+.meters { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.meter-row { display: grid; grid-template-columns: 42px 1fr 68px; align-items: center; gap: 8px; }
+.meter-label { font-size: 10.5px; letter-spacing: 1px; color: var(--dim); }
+.meter-track { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.meter-fill { height: 100%; background: var(--cyan); border-radius: inherit; }
+.meter-fill.hot { background: var(--mag); }
+.meter-val { font-size: 10.5px; color: var(--txt); text-align: right; font-variant-numeric: tabular-nums; }
